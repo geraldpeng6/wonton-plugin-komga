@@ -114,5 +114,5 @@ x-wonton:
       generate: { bytes: 32 }
   requirements:
     arch: [amd64, arm64]
-    # JVM 默认堆上限约 1G；本机空闲实测见 README。
+    # 上游文档：JVM 默认堆上限约 1G，内存吃紧时可用 JAVA_TOOL_OPTIONS=-Xmx 调小。
     memory: 512M
