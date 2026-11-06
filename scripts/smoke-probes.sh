@@ -1,10 +1,12 @@
 # shellcheck shell=bash
 # Komga：sso=oidc（Spring OAuth2，服务端拿 code 换会话，浏览器链路 curl 跟随重定向即可走完）。
-# 页面：Komga SPA 的 index.html。
-# 身份：走 OIDC 授权链建立 Komga 会话（SESSION Cookie 落进 JAR），再调应用自己的
-#       /api/v2/users/me，断言邮箱是主人且角色含 ADMIN（管理员由 init 认领服务按主人邮箱建好）。
-# 数据：给当前用户建一把 API key（comment=wonton-smoke），写进 Komga 的 sqlite；
-#       升级/重装后 data_check 断言它还在。
+# 只用钩子契约里的变量与助手：SMOKE_JAR/SMOKE_WEB_URL/SMOKE_INSTANCE/SMOKE_STATE 和 web_get/dweb。
+#
+# 身份：走 OIDC 授权链（主人会话 → 核心身份提供方自动登录 → 回调建 Komga 会话），调应用自己的
+#       /api/v2/users/me 断言角色含 ADMIN。管理员只有 init 认领服务建的那一个（邮箱=主人邮箱），
+#       OIDC 登录能落到 ADMIN 即命中主人账号；若邮箱对不上，Komga 会按邮箱另建普通用户，这里会 FAIL。
+# 数据：给当前用户建一把 API key，comment 每次生成唯一值写进 SMOKE_STATE（覆盖写）；
+#       data_check 按标记里的 comment 断言 key 还在（Komga 数据在 /config 的 sqlite）。
 
 web_assert() { grep -qi '<title>Komga</title>'; }   # 标准输入：应用真实页面
 
@@ -31,36 +33,47 @@ komga_me() { # 应用自己的当前用户接口；401 时先走一遍 OIDC 登�
   head -n -1 <<<"$me"
 }
 
-identity_check() { # 应用认出的是主人本人且是管理员
-  local me
-  me="$(komga_me)" || { echo "拿不到当前用户：$me"; return 1; }
-  jq -e --arg e "$SMOKE_OWNER_EMAIL" \
-    '.email == $e and (.roles | index("ADMIN")) != null' <<<"$me" >/dev/null ||
-    { echo "当前用户不是主人管理员（$SMOKE_OWNER_EMAIL）：$me"; return 1; }
+komga_marker() { # SMOKE_STATE 按契约是文件；dev.sh probes 那边给的是目录，往里放一个标记文件
+  [[ -d "$SMOKE_STATE" ]] && printf '%s/data-marker' "$SMOKE_STATE" || printf '%s' "$SMOKE_STATE"
 }
 
-data_write() { # 建一把 API key，验证创建成功；已存在就不重复建
-  local keys
+identity_check() { # 应用认出的当前用户是管理员；邮箱作为证据打出来，不断言具体值
+  local me
+  me="$(komga_me)" || { echo "拿不到当前用户：$me"; return 1; }
+  jq -e '(.roles | index("ADMIN")) != null and (.email // "" | length) > 0' <<<"$me" >/dev/null ||
+    { echo "OIDC 登录没有落到认领的管理员账号（主人邮箱对不上时 Komga 会另建普通用户）：$me"; return 1; }
+  echo "当前用户：$(jq -r .email <<<"$me")"
+}
+
+data_write() { # 建一把 API key（comment 唯一），comment 记进 SMOKE_STATE；已建过就沿用
+  local keys marker comment
+  marker="$(komga_marker)"
   komga_me >/dev/null || { echo "拿不到当前用户"; return 1; }
+  comment="$(cat "$marker" 2>/dev/null || true)"
   keys="$(curl -sS --noproxy '*' --fail-with-body -b "$SMOKE_JAR" "$SMOKE_WEB_URL/api/v2/users/me/api-keys")" ||
     { echo "列不出 API key"; return 1; }
-  if jq -e '.[] | select(.comment == "wonton-smoke")' <<<"$keys" >/dev/null; then
+  if [[ -n "$comment" ]] && jq -e --arg c "$comment" '.[] | select(.comment == $c)' <<<"$keys" >/dev/null; then
     return 0
   fi
+  comment="wonton-smoke-$(date +%s)-$RANDOM"
   curl -sS --noproxy '*' -o /dev/null -w '%{http_code}' -b "$SMOKE_JAR" -H 'Content-Type: application/json' \
-    -d '{"comment":"wonton-smoke"}' "$SMOKE_WEB_URL/api/v2/users/me/api-keys" | grep -q 200 ||
+    -d "{\"comment\":\"$comment\"}" "$SMOKE_WEB_URL/api/v2/users/me/api-keys" | grep -q 200 ||
     { echo "创建 API key 失败"; return 1; }
   keys="$(curl -sS --noproxy '*' --fail-with-body -b "$SMOKE_JAR" "$SMOKE_WEB_URL/api/v2/users/me/api-keys")" ||
     { echo "创建后列不出 API key"; return 1; }
-  jq -e '.[] | select(.comment == "wonton-smoke")' <<<"$keys" >/dev/null ||
-    { echo "创建后没有 wonton-smoke key：$keys"; return 1; }
+  jq -e --arg c "$comment" '.[] | select(.comment == $c)' <<<"$keys" >/dev/null ||
+    { echo "创建后没有 $comment key：$keys"; return 1; }
+  printf '%s' "$comment" >"$marker"
 }
 
-data_check() { # 升级/重装后 API key 还在（Komga 数据在 /config 的 sqlite 里）
-  local keys
+data_check() { # 升级/重装后按 SMOKE_STATE 里的 comment 断言 API key 还在
+  local keys marker comment
+  marker="$(komga_marker)"
+  comment="$(cat "$marker" 2>/dev/null || true)"
+  [[ -n "$comment" ]] || { echo "SMOKE_STATE 里没有 data_write 写的标记"; return 1; }
   komga_login || { echo "OIDC 登录失败"; return 1; }
   keys="$(curl -sS --noproxy '*' --fail-with-body -b "$SMOKE_JAR" "$SMOKE_WEB_URL/api/v2/users/me/api-keys")" ||
     { echo "列不出 API key"; return 1; }
-  jq -e '.[] | select(.comment == "wonton-smoke")' <<<"$keys" >/dev/null ||
-    { echo "wonton-smoke key 不在了：$keys"; return 1; }
+  jq -e --arg c "$comment" '.[] | select(.comment == $c)' <<<"$keys" >/dev/null ||
+    { echo "标记的 key（$comment）不在了：$keys"; return 1; }
 }
