@@ -1,78 +1,118 @@
-# 示例插件：nginx 显示一个网页，向登录的人问好。改成自己的应用见 https://github.com/geraldpeng6/wonton-docs/blob/main/develop.md#写插件。
+# Komga：漫画、漫画电子书和电子书的媒体库服务器。本地浏览器阅读、阅读进度和元数据管理。
+#
+# 登录走 sso: oidc：Komga 官方支持 OpenID Connect（spring.security.oauth2.client.*），
+# 但它按邮箱匹配用户，且 OIDC 自动建号只会建普通用户（上游没有角色映射）。
+# 所以用上游自己的首次启动接口 /api/v1/claim（网页首次创建管理员用的就是它），
+# 用主人的邮箱认领管理员：OIDC 登录按邮箱落到这个管理员账号上，打开就是管理员本人。
+#
+# 漫画库放在共享文件夹里，只读挂载：Komga 的库里改元数据都写进自己的数据库，
+# 只有“把元数据写回文件”“导入文件到库目录”这类主动开启的功能才要写库文件夹。
+name: komga
+
 services:
-  web:
-    # 镜像按摘要固定（多架构镜像写清单列表的摘要），标签只给人看。
-    image: nginx:1.31.7-alpine@sha256:892bb2152464f0c5d8972593a5f5afaf8054552580b699d95f8ff4af08c2d33d
+  komga:
+    image: gotson/komga:1.30.0@sha256:3ae42f88511211e0ec2637d88f3df1b709d07cfb093427e58444ae200a62608e
+    # 上游镜像可按任意 uid 运行（官方文档用 user: "1000:1000"）。
+    user: "${PUID}:${PGID}"
     environment:
-      # 网关代登录：SSI 回显的 Remote-User 只信核心带来的。官方镜像启动时对 templates 目录里的
-      # *.template 做 envsubst，把下面的地址换进 nginx 配置（见 web/default.conf.template）。
-      WONTON_CORE_ADDRESS: ${WONTON_CORE_ADDRESS}
-    # 包里的文件经 configs 交给容器（核心在启动前写进去），不能用卷挂载。
-    configs:
-      - source: site
-        target: /etc/nginx/templates/default.conf.template
-      - source: page
-        target: /usr/share/nginx/html/index.html
-      - source: tokens
-        target: /usr/share/nginx/html/tokens.css
+      TZ: ${TZ}
+      # OIDC 客户端。issuer 由核心注入，Komga 用 issuer-uri 自动发现各端点；
+      # Spring 环境变量命名规则：点换下划线、去横线、转大写（上游配置文档同款）。
+      SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_KOMGA_CLIENTID: ${WONTON_OIDC_CLIENT_ID}
+      SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_KOMGA_CLIENTSECRET: ${WONTON_OIDC_CLIENT_SECRET}
+      SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_KOMGA_CLIENTNAME: Komga
+      SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_KOMGA_SCOPE: openid,profile,email
+      SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_KOMGA_PROVIDER: komga
+      SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_KOMGA_ISSUERURI: ${WONTON_OIDC_ISSUER}
+      # 主人经 OIDC 登录命中认领好的管理员；家人登录时按邮箱自动建普通用户（身份提供方是核心，可开）。
+      KOMGA_OAUTH2ACCOUNTCREATION: "true"
+    volumes:
+      - ${WONTON_APP_DATA:?核心没有注入插件数据目录}/config:/config
+      - ${WONTON_SHARE_MEDIA:?核心没有注入 media 共享文件夹}:/data:ro
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
+      # actuator health 会检查数据库，不只是进程活着。
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:25600/actuator/health"]
       interval: 30s
       timeout: 5s
-      start_period: 30s
-      start_interval: 1s
+      start_period: 60s
+      start_interval: 2s
 
-configs:
-  site:
-    file: web/default.conf.template
-  page:
-    file: web/index.html
-  tokens:
-    file: web/tokens.css
+  # 首次装好（库为空）时认领服务器：用主人的邮箱建管理员，密码是核心生成的随机值，
+  # 之后 OIDC 按邮箱匹配到这个账号。已认领（重装保留数据、升级重建容器）就直接退出。
+  init:
+    image: gotson/komga:1.30.0@sha256:3ae42f88511211e0ec2637d88f3df1b709d07cfb093427e58444ae200a62608e
+    depends_on:
+      komga:
+        condition: service_healthy
+    environment:
+      CLAIM_EMAIL: ${WONTON_OWNER_EMAIL:?安装前先在 App 里填好邮箱}
+      CLAIM_PASSWORD: ${WONTON_SECRET_ADMIN_PASSWORD:?核心没有注入管理员密码}
+    # 镜像的 ENTRYPOINT 是 java，command 只会接到它后面：这里整体换成 sh 跑认领脚本。
+    entrypoint:
+      - sh
+      - -ec
+      - |
+        claim="http://komga:25600/api/v1/claim"
+        status="$$(curl -fsS "$$claim")"
+        case "$$status" in
+          *'"isClaimed":true'*) echo "服务器已认领，跳过：$$status"; exit 0 ;;
+          *'"isClaimed":false'*) ;;
+          *) echo "认领状态读不出来：$$status"; exit 1 ;;
+        esac
+        curl -fsS -X POST \
+          -H "X-Komga-Email: $$CLAIM_EMAIL" \
+          -H "X-Komga-Password: $$CLAIM_PASSWORD" \
+          "$$claim" >/dev/null
+        echo "已认领管理员"
+    restart: "no"
 
 x-wonton:
   spec: "0.5"
-  # 换成你自己的：反向域名形式，装上以后不能改。
-  id: app.example.hello
-  version: 0.1.1
+  id: app.komga.komga
+  version: 0.1.0
   kind: app
-  title: { zh: 你好, en: Hello }
-  description: { zh: 向登录的人问好的示例网页, en: An example page that greets whoever is signed in }
+  title: { en: Komga }
+  description:
+    zh: 管理你的漫画和电子书库，在线阅读、记进度
+    en: Manage your comics and ebooks, read them online with progress tracking
   icon: icon.svg
   notices: [NOTICE]
-  screenshots: [screenshots/home.png]
-  author: { name: Example }
-  homepage: https://nginx.org
-  # 应用（这里是 nginx）的许可证；插件包自己的许可证写在仓库的 LICENSE 里。
-  license: BSD-2-Clause
+  screenshots: [screenshots/libraries.png, screenshots/series.png, screenshots/reader.png]
+  author: { name: geraldpeng6, url: https://github.com/geraldpeng6 }
+  homepage: https://komga.org
+  license: MIT
   tags:
-    zh: [工具]
-    en: [Tools]
+    zh: [阅读, 漫画]
+    en: [Reading, Comics]
   about:
     zh: |
-      一个示例网页：登录以后，页面会向你问好。新建插件时可以照着改。
+      把共享文件夹里的漫画和电子书扫成媒体库，在手机浏览器里翻页阅读、记住阅读进度。
+
+      支持多库管理、系列整理、阅读历史和元数据编辑；家人登录后是普通用户，只能看你分享的库。
+
+      漫画库放在 media 共享文件夹里，插件只读不写；改元数据保存在插件自己的数据库里。
     en: |
-      An example page: once you are signed in, the page says hello. Copy it as a starting point for a new plugin.
-  release_notes: { zh: 名字和说明更新。, en: Product name and description update. }
+      Scan the comics and ebooks in your shared folder into a media library, read them in the phone browser with progress tracking.
+
+      Multiple libraries, series organization, reading history and metadata editing; family members sign in as regular users and only see the libraries shared with them.
+
+      The library lives in the media shared folder, mounted read-only; metadata changes are stored in the plugin's own database.
+  release_notes: { zh: 首个版本。, en: Initial release. }
   webui:
-    service: web
-    port: 80
-    # 示例页回显网关注入的用户名，见 https://github.com/geraldpeng6/wonton-docs/blob/main/plugin-spec.md#网关代登录sso-proxy。
-    sso: proxy
-    proxy:
-      headers:
-        Remote-User: "{user}"
-  # 能放到底栏的页面，见 https://github.com/geraldpeng6/wonton-docs/blob/main/plugin-spec.md#底栏页面tabs。放不放由用户决定。
-  tabs:
-    - id: home
-      title: { zh: 主页, en: Home }
-      icon: tabs/home.svg
-      icon_selected: tabs/home-fill.svg
-      path: /
-      # 这个页面没做适配，用默认的 inset：页面夹在 App 的栏中间，不会被挡。
-      # 想让内容从栏下滚过，写 layout: edge-to-edge，并用 --wonton-inset-* 留出栏的位置。
-  permissions: []
-  # 上游 nginx 官方镜像，amd64 和 arm64 都有；上游没写最低内存，按本机空闲实测取整（实测约 24M，取 64M）。
+    service: komga
+    port: 25600
+    # 直接打开 OIDC 登录起点，跳过 Komga 自己的登录页。
+    path: /oauth2/authorization/komga
+    sso: oidc
+    oidc:
+      redirect_paths: [/login/oauth2/code/komga]
+  permissions:
+    - storage.share.media:read
+    - owner.identity
+  secrets:
+    admin_password:
+      generate: { bytes: 32 }
   requirements:
     arch: [amd64, arm64]
-    memory: 64M
+    # JVM 默认堆上限约 1G；本机空闲实测见 README。
+    memory: 512M
