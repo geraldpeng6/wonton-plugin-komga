@@ -1,14 +1,18 @@
 图标
 ====
 
-`icon.svg` 为本仓库原创，按插件规范的线条风格手写，未用图片模型生成。从模板新建的插件换成自己的图标时，这里按实际情况重写。
+`icon.svg` 取自 Komga 官方标志（[gotson/komga](https://github.com/gotson/komga) 仓库的
+`komga-webui/src/assets/logo.svg`），未改色、未变形，仅移除编辑器元数据、给透明角加白色底。
+版权归 Komga 作者（Gotson）所有，按上游仓库的 MIT 许可证分发。
+
+Komga 名称与标志是 Gotson 的商标。本插件是社区作品，与上游没有隶属或背书关系。
 
 许可证
 ------
 
 MIT License
 
-Copyright (c) 2026 Wonton plugin authors
+Copyright (c) 2026 geraldpeng6
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
