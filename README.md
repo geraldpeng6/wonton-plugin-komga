@@ -1,6 +1,6 @@
 # 云吞插件：Komga
 
-[云吞](https://github.com/geraldpeng6/wonton)插件：[Komga](https://komga.org) 漫画和电子书媒体库服务器。开发流程见[插件开发指南](https://github.com/geraldpeng6/wonton-docs/blob/main/develop.md)。
+[云吞](https://github.com/geraldpeng6/wonton)插件：[Komga](https://komga.org) 漫画和电子书媒体库服务器。开发流程见[插件开发指南](https://github.com/wontonapp/wonton-docs/blob/main/develop.md)。
 
 - 登录：`sso: oidc`，由云吞的身份提供方登录，打开即管理员本人。Komga 按邮箱匹配用户，首次安装用上游自己的
   `/api/v1/claim` 接口（网页首次创建管理员的同一条路）以主人邮箱建好管理员；家人经 OIDC 登录时自动建普通用户。
