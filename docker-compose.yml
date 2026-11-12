@@ -71,10 +71,10 @@ x-wonton:
   id: app.komga.komga
   version: 0.1.0
   kind: app
-  title: { en: Komga }
+  title: { zh: 漫画书库（Komga）, en: Comic Library (Komga) }
   description:
-    zh: 管理你的漫画和电子书库，在线阅读、记进度
-    en: Manage your comics and ebooks, read them online with progress tracking
+    zh: 专为漫画收藏整理的书库：按系列排好、能改封面和简介，网页里翻页看、记住进度；家人登录后只看得到你分享给他们的库。适合漫画多、想管得井井有条的人。
+    en: "A library built for comic collections: series neatly arranged with editable details, reading in the browser with progress saved, and family members see only the libraries you share with them. For big collections you want kept in order."
   icon: icon.svg
   notices: [NOTICE]
   screenshots: [screenshots/libraries.png, screenshots/series.png, screenshots/reader.png]
